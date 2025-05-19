@@ -1,6 +1,6 @@
 # Contribution Guidelines
 
-This repository contains C++ sources that should compile with at least C++17.
+This repository contains C++ sources that should compile with at least C++14.
 
 ## Style
 - Format all C++ code using `clang-format` with the Google style.
