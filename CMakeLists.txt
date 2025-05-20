@@ -29,4 +29,8 @@ if(BUILD_TESTS)
   add_executable(test_kalman tests/test_kalman.cpp)
   target_link_libraries(test_kalman sensor_fuse)
   add_test(NAME test_kalman COMMAND test_kalman)
+
+  add_executable(test_integration tests/test_integration.cpp)
+  target_link_libraries(test_integration sensor_fuse)
+  add_test(NAME test_integration COMMAND test_integration)
 endif()
