@@ -1,0 +1,33 @@
+#ifndef EIGEN_DENSE
+#define EIGEN_DENSE
+
+#include <ostream>
+
+namespace Eigen {
+
+struct Vector3d {
+  double x{0.0};
+  double y{0.0};
+  double z{0.0};
+
+  Vector3d() = default;
+  Vector3d(double x_, double y_, double z_) : x(x_), y(y_), z(z_) {}
+
+  static Vector3d Zero() { return Vector3d(0.0, 0.0, 0.0); }
+
+  Vector3d transpose() const { return *this; }
+
+  bool operator==(const Vector3d &other) const {
+    return x == other.x && y == other.y && z == other.z;
+  }
+  bool operator!=(const Vector3d &other) const { return !(*this == other); }
+};
+
+inline std::ostream &operator<<(std::ostream &os, const Vector3d &v) {
+  os << v.x << " " << v.y << " " << v.z;
+  return os;
+}
+
+} // namespace Eigen
+
+#endif // EIGEN_DENSE
