@@ -1,13 +1,16 @@
-#include "sensor_fuse/imu_service.hpp"
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <condition_variable>
-#include <gtest/gtest.h>
 #include <mutex>
 #include <queue>
 #include <thread>
 
-template <typename T> class ConcurrentQueue {
-public:
+#include "sensor_fuse/imu_service.hpp"
+
+template <typename T>
+class ConcurrentQueue {
+ public:
   void push(const T &value) {
     std::lock_guard<std::mutex> lock(m_);
     q_.push(value);
@@ -23,14 +26,13 @@ public:
 
   bool pop(T &value) {
     std::lock_guard<std::mutex> lock(m_);
-    if (q_.empty())
-      return false;
+    if (q_.empty()) return false;
     value = q_.front();
     q_.pop();
     return true;
   }
 
-private:
+ private:
   std::queue<T> q_;
   std::mutex m_;
   std::condition_variable cv_;
@@ -112,8 +114,7 @@ struct Planner {
 struct Control {
   bool command{false};
   void apply(const Trajectory &traj, const DeltaPose &delta) {
-    if (traj.valid && delta.value == Eigen::Vector3d::Zero())
-      command = true;
+    if (traj.valid && delta.value == Eigen::Vector3d::Zero()) command = true;
   }
 };
 
@@ -157,68 +158,86 @@ TEST(Integration, Pipeline) {
   sensor_fuse::ImuService imu(buf, kf);
 
   auto pose_thread = std::thread([&] {
-    ImuData imu_data;
-    imu_queue.wait_and_pop(imu_data);
-    imu.set(imu_data.timestamp, imu_data.accel, Eigen::Vector3d::Zero());
     PoseEstimator pose_est{imu};
-    auto pose = pose_est.estimate(imu_data.timestamp);
-    {
-      std::lock_guard<std::mutex> lock(delta_mutex);
-      shared_delta = DeltaPose(pose);
+    auto next = std::chrono::steady_clock::now();
+    for (int i = 0; i < 1; ++i) {
+      ImuData imu_data;
+      imu_queue.wait_and_pop(imu_data);
+      imu.set(imu_data.timestamp, imu_data.accel, Eigen::Vector3d::Zero());
+      auto pose = pose_est.estimate(imu_data.timestamp);
+      {
+        std::lock_guard<std::mutex> lock(delta_mutex);
+        shared_delta = DeltaPose(pose);
+      }
+      delta_queue.push(shared_delta);
+      next += std::chrono::milliseconds(100);  // 10 Hz
+      std::this_thread::sleep_until(next);
     }
-    delta_queue.push(shared_delta);
   });
 
-  for (auto &th : cam_threads)
-    th.join();
-  imu_thread.join();
-  lidar_thread.join();
-  pose_thread.join();
-
   auto recog_thread = std::thread([&] {
-    CamData cam;
-    int cam_count = 0;
-    for (int i = 0; i < 4; ++i) {
-      cam_queue.wait_and_pop(cam);
-      ++cam_count;
+    auto next = std::chrono::steady_clock::now();
+    for (int i = 0; i < 1; ++i) {
+      CamData cam;
+      int cam_count = 0;
+      for (int j = 0; j < 4; ++j) {
+        cam_queue.wait_and_pop(cam);
+        ++cam_count;
+      }
+      LidarData lidar;
+      lidar_queue.wait_and_pop(lidar);
+      ObjectRecognizer recog{cam_count, lidar.available};
+      DeltaPose local_delta;
+      {
+        std::lock_guard<std::mutex> lock(delta_mutex);
+        local_delta = shared_delta;
+      }
+      recog.process(local_delta);
+      env_queue.push(EnvironmentModel{recog.recognized});
+      next += std::chrono::milliseconds(100);  // 10 Hz
+      std::this_thread::sleep_until(next);
     }
-    LidarData lidar;
-    lidar_queue.wait_and_pop(lidar);
-    ObjectRecognizer recog{cam_count, lidar.available};
-    DeltaPose local_delta;
-    {
-      std::lock_guard<std::mutex> lock(delta_mutex);
-      local_delta = shared_delta;
-    }
-    recog.process(local_delta);
-    env_queue.push(EnvironmentModel{recog.recognized});
   });
 
   auto planner_thread = std::thread([&] {
-    EnvironmentModel env;
-    env_queue.wait_and_pop(env);
-    Planner planner;
-    DeltaPose local_delta;
-    {
-      std::lock_guard<std::mutex> lock(delta_mutex);
-      local_delta = shared_delta;
+    auto next = std::chrono::steady_clock::now();
+    for (int i = 0; i < 1; ++i) {
+      EnvironmentModel env;
+      env_queue.wait_and_pop(env);
+      Planner planner;
+      DeltaPose local_delta;
+      {
+        std::lock_guard<std::mutex> lock(delta_mutex);
+        local_delta = shared_delta;
+      }
+      planner.create(env, local_delta);
+      traj_queue.push(Trajectory{planner.plan_ready});
+      next += std::chrono::milliseconds(100);  // 10 Hz
+      std::this_thread::sleep_until(next);
     }
-    planner.create(env, local_delta);
-    traj_queue.push(Trajectory{planner.plan_ready});
   });
 
   Control ctrl;
   auto control_thread = std::thread([&] {
-    Trajectory traj;
-    traj_queue.wait_and_pop(traj);
-    DeltaPose local_delta;
-    {
-      std::lock_guard<std::mutex> lock(delta_mutex);
-      local_delta = shared_delta;
+    auto next = std::chrono::steady_clock::now();
+    for (int i = 0; i < 1; ++i) {
+      Trajectory traj;
+      traj_queue.wait_and_pop(traj);
+      DeltaPose local_delta;
+      {
+        std::lock_guard<std::mutex> lock(delta_mutex);
+        local_delta = shared_delta;
+      }
+      ctrl.apply(traj, local_delta);
+      next += std::chrono::milliseconds(10);  // 100 Hz
+      std::this_thread::sleep_until(next);
     }
-    ctrl.apply(traj, local_delta);
   });
 
+  for (auto &th : cam_threads) th.join();
+  imu_thread.join();
+  lidar_thread.join();
+  pose_thread.join();
   recog_thread.join();
   planner_thread.join();
   control_thread.join();

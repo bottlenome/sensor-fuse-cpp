@@ -15,5 +15,11 @@ This directory contains unit and integration tests for **sensor-fuse-cpp**.
   - Trajectory → Control → Control signal
   - DeltaPose is referenced by all processing stages (DeltaPose はすべての処理から参照されます)
 
+Processing modules run on separate threads:
+  - PoseEstimator: 10 Hz
+  - ObjectRecognizer: 10 Hz
+  - Planner: 10 Hz
+  - Control: 100 Hz
+
 The integration test verifies that data can pass through this simplified
 pipeline and produce a valid control command.

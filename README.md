@@ -83,8 +83,15 @@ sensor-fuse-cpp/
 │   └── demo.cpp          # Simple usage demonstration
 └── tests/
     ├── test_buffer.cpp   # Unit tests for buffer
-    └── test_kalman.cpp   # Unit tests for Kalman filter
+    ├── test_kalman.cpp   # Unit tests for Kalman filter
+    └── test_integration.cpp # Multi-threaded integration test
 ```
+
+## Integration Test
+
+The integration test executes the processing pipeline on separate threads.
+`PoseEstimator`, `ObjectRecognizer`, and `Planner` run at **10 Hz** while
+`Control` operates at **100 Hz**.
 
 ## Contributing
 
