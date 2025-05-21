@@ -132,7 +132,9 @@ TEST(Integration, Pipeline) {
   auto imu_thread = std::thread([&] {
     double t = 0.0;
     int seq = 0;
-    for (int i = 0; i < 1; ++i) {
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start <
+           std::chrono::milliseconds(500)) {
       imu_queue.push(ImuData(t, seq++, Eigen::Vector3d{0, 0, 9.8}));
       t += 0.01;
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -140,8 +142,13 @@ TEST(Integration, Pipeline) {
   });
 
   auto cam_worker = [&](int id) {
-    cam_queue.push(CamData(0.0, id, id));
-    std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    auto start = std::chrono::steady_clock::now();
+    int seq = 0;
+    while (std::chrono::steady_clock::now() - start <
+           std::chrono::milliseconds(500)) {
+      cam_queue.push(CamData(0.0, seq++, id));
+      std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
   };
   std::thread cam_threads[4];
   for (int i = 0; i < 4; ++i) {
@@ -149,8 +156,13 @@ TEST(Integration, Pipeline) {
   }
 
   auto lidar_thread = std::thread([&] {
-    lidar_queue.push(LidarData(0.0, 0, true));
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    auto start = std::chrono::steady_clock::now();
+    int seq = 0;
+    while (std::chrono::steady_clock::now() - start <
+           std::chrono::milliseconds(500)) {
+      lidar_queue.push(LidarData(0.0, seq++, true));
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
   });
 
   sensor_fuse::LinearBuffer<Eigen::Vector3d> buf;
@@ -160,7 +172,9 @@ TEST(Integration, Pipeline) {
   auto pose_thread = std::thread([&] {
     PoseEstimator pose_est{imu};
     auto next = std::chrono::steady_clock::now();
-    for (int i = 0; i < 1; ++i) {
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start <
+           std::chrono::milliseconds(500)) {
       ImuData imu_data;
       imu_queue.wait_and_pop(imu_data);
       imu.set(imu_data.timestamp, imu_data.accel, Eigen::Vector3d::Zero());
@@ -177,7 +191,9 @@ TEST(Integration, Pipeline) {
 
   auto recog_thread = std::thread([&] {
     auto next = std::chrono::steady_clock::now();
-    for (int i = 0; i < 1; ++i) {
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start <
+           std::chrono::milliseconds(500)) {
       CamData cam;
       int cam_count = 0;
       for (int j = 0; j < 4; ++j) {
@@ -201,7 +217,9 @@ TEST(Integration, Pipeline) {
 
   auto planner_thread = std::thread([&] {
     auto next = std::chrono::steady_clock::now();
-    for (int i = 0; i < 1; ++i) {
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start <
+           std::chrono::milliseconds(500)) {
       EnvironmentModel env;
       env_queue.wait_and_pop(env);
       Planner planner;
@@ -220,15 +238,18 @@ TEST(Integration, Pipeline) {
   Control ctrl;
   auto control_thread = std::thread([&] {
     auto next = std::chrono::steady_clock::now();
-    for (int i = 0; i < 1; ++i) {
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start <
+           std::chrono::milliseconds(500)) {
       Trajectory traj;
-      traj_queue.wait_and_pop(traj);
-      DeltaPose local_delta;
-      {
-        std::lock_guard<std::mutex> lock(delta_mutex);
-        local_delta = shared_delta;
+      if (traj_queue.pop(traj)) {
+        DeltaPose local_delta;
+        {
+          std::lock_guard<std::mutex> lock(delta_mutex);
+          local_delta = shared_delta;
+        }
+        ctrl.apply(traj, local_delta);
       }
-      ctrl.apply(traj, local_delta);
       next += std::chrono::milliseconds(10);  // 100 Hz
       std::this_thread::sleep_until(next);
     }
