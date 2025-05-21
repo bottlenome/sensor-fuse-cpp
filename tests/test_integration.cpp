@@ -67,27 +67,58 @@ struct Control {
   }
 };
 
-struct ImuData {
-  double timestamp;
+struct SensorData {
+  double timestamp{0.0};
+  int seq{0};
+};
+
+struct ImuData : SensorData {
   Eigen::Vector3d accel;
+  ImuData() = default;
+  ImuData(double ts, int s, const Eigen::Vector3d &a) {
+    timestamp = ts;
+    seq = s;
+    accel = a;
+  }
+};
+
+struct CamData : SensorData {
+  int id{0};
+  CamData() = default;
+  CamData(double ts, int s, int cam_id) {
+    timestamp = ts;
+    seq = s;
+    id = cam_id;
+  }
+};
+
+struct LidarData : SensorData {
+  bool available{false};
+  LidarData() = default;
+  LidarData(double ts, int s, bool avail) {
+    timestamp = ts;
+    seq = s;
+    available = avail;
+  }
 };
 
 TEST(Integration, Pipeline) {
   ConcurrentQueue<ImuData> imu_queue;
-  ConcurrentQueue<int> cam_queue;
-  ConcurrentQueue<int> lidar_queue;
+  ConcurrentQueue<CamData> cam_queue;
+  ConcurrentQueue<LidarData> lidar_queue;
 
   auto imu_thread = std::thread([&] {
     double t = 0.0;
+    int seq = 0;
     for (int i = 0; i < 1; ++i) {
-      imu_queue.push(ImuData{t, Eigen::Vector3d{0, 0, 9.8}});
+      imu_queue.push(ImuData(t, seq++, Eigen::Vector3d{0, 0, 9.8}));
       t += 0.01;
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   });
 
   auto cam_worker = [&](int id) {
-    cam_queue.push(id);
+    cam_queue.push(CamData(0.0, id, id));
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
   };
   std::thread cam_threads[4];
@@ -96,7 +127,7 @@ TEST(Integration, Pipeline) {
   }
 
   auto lidar_thread = std::thread([&] {
-    lidar_queue.push(0);
+    lidar_queue.push(LidarData(0.0, 0, true));
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   });
 
@@ -116,14 +147,14 @@ TEST(Integration, Pipeline) {
   imu_thread.join();
   lidar_thread.join();
 
-  int cam_id;
+  CamData cam;
   int cam_count = 0;
-  while (cam_queue.pop(cam_id))
+  while (cam_queue.pop(cam))
     ++cam_count;
-  int lidar_dummy;
-  lidar_queue.wait_and_pop(lidar_dummy);
+  LidarData lidar;
+  lidar_queue.wait_and_pop(lidar);
 
-  ObjectRecognizer recog{cam_count, true};
+  ObjectRecognizer recog{cam_count, lidar.available};
   recog.process();
 
   Planner planner;

@@ -2,7 +2,7 @@
 
 ## Overview
 
-`sensor-fuse-cpp` is a C++ library for sensor data synchronization and fusion, specializing in IMU data interpolation and Kalman filtering. Designed with Dependency Injection (DI), it maximizes modularity, testability, and ease of extension.
+`sensor-fuse-cpp` is a C++ library for sensor data synchronization and fusion. It supports processing streams such as IMU, camera, and lidar, providing interpolation and filtering utilities. Designed with Dependency Injection (DI), it maximizes modularity, testability, and ease of extension.
 
 ## Features
 
