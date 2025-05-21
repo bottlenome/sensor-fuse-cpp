@@ -51,22 +51,6 @@ struct ObjectRecognizer {
   }
 };
 
-struct Planner {
-  bool plan_ready{false};
-  void create(const ObjectRecognizer &obj) {
-    if (obj.recognized)
-      plan_ready = true;
-  }
-};
-
-struct Control {
-  bool command{false};
-  void apply(const Planner &p) {
-    if (p.plan_ready)
-      command = true;
-  }
-};
-
 struct SensorData {
   double timestamp{0.0};
   int seq{0};
@@ -102,10 +86,43 @@ struct LidarData : SensorData {
   }
 };
 
+struct DeltaPose {
+  Eigen::Vector3d value{Eigen::Vector3d::Zero()};
+  DeltaPose() = default;
+  explicit DeltaPose(const Eigen::Vector3d &v) : value(v) {}
+};
+
+struct EnvironmentModel {
+  bool objects{false};
+};
+
+struct Trajectory {
+  bool valid{false};
+};
+
+struct Planner {
+  bool plan_ready{false};
+  void create(const EnvironmentModel &env) {
+    if (env.objects)
+      plan_ready = true;
+  }
+};
+
+struct Control {
+  bool command{false};
+  void apply(const Trajectory &traj) {
+    if (traj.valid)
+      command = true;
+  }
+};
+
 TEST(Integration, Pipeline) {
   ConcurrentQueue<ImuData> imu_queue;
   ConcurrentQueue<CamData> cam_queue;
   ConcurrentQueue<LidarData> lidar_queue;
+  ConcurrentQueue<DeltaPose> delta_queue;
+  ConcurrentQueue<EnvironmentModel> env_queue;
+  ConcurrentQueue<Trajectory> traj_queue;
 
   auto imu_thread = std::thread([&] {
     double t = 0.0;
@@ -135,35 +152,58 @@ TEST(Integration, Pipeline) {
   sensor_fuse::ImuKalman kf;
   sensor_fuse::ImuService imu(buf, kf);
 
-  ImuData imu_data;
-  imu_queue.wait_and_pop(imu_data);
-  imu.set(imu_data.timestamp, imu_data.accel, Eigen::Vector3d::Zero());
-
-  PoseEstimator pose_est{imu};
-  auto pose = pose_est.estimate(imu_data.timestamp);
+  auto pose_thread = std::thread([&] {
+    ImuData imu_data;
+    imu_queue.wait_and_pop(imu_data);
+    imu.set(imu_data.timestamp, imu_data.accel, Eigen::Vector3d::Zero());
+    PoseEstimator pose_est{imu};
+    auto pose = pose_est.estimate(imu_data.timestamp);
+    delta_queue.push(DeltaPose(pose));
+  });
 
   for (auto &th : cam_threads)
     th.join();
   imu_thread.join();
   lidar_thread.join();
+  pose_thread.join();
 
-  CamData cam;
-  int cam_count = 0;
-  while (cam_queue.pop(cam))
-    ++cam_count;
-  LidarData lidar;
-  lidar_queue.wait_and_pop(lidar);
+  auto recog_thread = std::thread([&] {
+    CamData cam;
+    int cam_count = 0;
+    for (int i = 0; i < 4; ++i) {
+      cam_queue.wait_and_pop(cam);
+      ++cam_count;
+    }
+    LidarData lidar;
+    lidar_queue.wait_and_pop(lidar);
+    ObjectRecognizer recog{cam_count, lidar.available};
+    recog.process();
+    env_queue.push(EnvironmentModel{recog.recognized});
+  });
 
-  ObjectRecognizer recog{cam_count, lidar.available};
-  recog.process();
-
-  Planner planner;
-  planner.create(recog);
+  auto planner_thread = std::thread([&] {
+    EnvironmentModel env;
+    env_queue.wait_and_pop(env);
+    Planner planner;
+    planner.create(env);
+    traj_queue.push(Trajectory{planner.plan_ready});
+  });
 
   Control ctrl;
-  ctrl.apply(planner);
+  auto control_thread = std::thread([&] {
+    Trajectory traj;
+    traj_queue.wait_and_pop(traj);
+    ctrl.apply(traj);
+  });
 
-  EXPECT_EQ(pose, Eigen::Vector3d::Zero());
+  recog_thread.join();
+  planner_thread.join();
+  control_thread.join();
+
+  DeltaPose delta;
+  delta_queue.wait_and_pop(delta);
+
+  EXPECT_EQ(delta.value, Eigen::Vector3d::Zero());
   EXPECT_EQ(ctrl.command, true);
   return 0;
 }
