@@ -13,6 +13,7 @@ This directory contains unit and integration tests for **sensor-fuse-cpp**.
   - Cameras & Lidar → Object Recognizer → Environment model
   - Environment model → Planner → Trajectory
   - Trajectory → Control → Control signal
+  - DeltaPose is referenced by all processing stages (DeltaPose はすべての処理から参照されます)
 
 The integration test verifies that data can pass through this simplified
 pipeline and produce a valid control command.
