@@ -41,12 +41,19 @@ struct PoseEstimator {
   Eigen::Vector3d estimate(double t) { return imu.get(t).position; }
 };
 
+struct DeltaPose {
+  Eigen::Vector3d value{Eigen::Vector3d::Zero()};
+  DeltaPose() = default;
+  explicit DeltaPose(const Eigen::Vector3d &v) : value(v) {}
+};
+
 struct ObjectRecognizer {
   int camera_count;
   bool lidar_available;
   bool recognized{false};
-  void process() {
-    if (camera_count == 4 && lidar_available)
+  void process(const DeltaPose &delta) {
+    if (camera_count == 4 && lidar_available &&
+        delta.value == Eigen::Vector3d::Zero())
       recognized = true;
   }
 };
@@ -86,12 +93,6 @@ struct LidarData : SensorData {
   }
 };
 
-struct DeltaPose {
-  Eigen::Vector3d value{Eigen::Vector3d::Zero()};
-  DeltaPose() = default;
-  explicit DeltaPose(const Eigen::Vector3d &v) : value(v) {}
-};
-
 struct EnvironmentModel {
   bool objects{false};
 };
@@ -102,16 +103,16 @@ struct Trajectory {
 
 struct Planner {
   bool plan_ready{false};
-  void create(const EnvironmentModel &env) {
-    if (env.objects)
+  void create(const EnvironmentModel &env, const DeltaPose &delta) {
+    if (env.objects && delta.value == Eigen::Vector3d::Zero())
       plan_ready = true;
   }
 };
 
 struct Control {
   bool command{false};
-  void apply(const Trajectory &traj) {
-    if (traj.valid)
+  void apply(const Trajectory &traj, const DeltaPose &delta) {
+    if (traj.valid && delta.value == Eigen::Vector3d::Zero())
       command = true;
   }
 };
@@ -123,6 +124,9 @@ TEST(Integration, Pipeline) {
   ConcurrentQueue<DeltaPose> delta_queue;
   ConcurrentQueue<EnvironmentModel> env_queue;
   ConcurrentQueue<Trajectory> traj_queue;
+
+  DeltaPose shared_delta;
+  std::mutex delta_mutex;
 
   auto imu_thread = std::thread([&] {
     double t = 0.0;
@@ -158,7 +162,11 @@ TEST(Integration, Pipeline) {
     imu.set(imu_data.timestamp, imu_data.accel, Eigen::Vector3d::Zero());
     PoseEstimator pose_est{imu};
     auto pose = pose_est.estimate(imu_data.timestamp);
-    delta_queue.push(DeltaPose(pose));
+    {
+      std::lock_guard<std::mutex> lock(delta_mutex);
+      shared_delta = DeltaPose(pose);
+    }
+    delta_queue.push(shared_delta);
   });
 
   for (auto &th : cam_threads)
@@ -177,7 +185,12 @@ TEST(Integration, Pipeline) {
     LidarData lidar;
     lidar_queue.wait_and_pop(lidar);
     ObjectRecognizer recog{cam_count, lidar.available};
-    recog.process();
+    DeltaPose local_delta;
+    {
+      std::lock_guard<std::mutex> lock(delta_mutex);
+      local_delta = shared_delta;
+    }
+    recog.process(local_delta);
     env_queue.push(EnvironmentModel{recog.recognized});
   });
 
@@ -185,7 +198,12 @@ TEST(Integration, Pipeline) {
     EnvironmentModel env;
     env_queue.wait_and_pop(env);
     Planner planner;
-    planner.create(env);
+    DeltaPose local_delta;
+    {
+      std::lock_guard<std::mutex> lock(delta_mutex);
+      local_delta = shared_delta;
+    }
+    planner.create(env, local_delta);
     traj_queue.push(Trajectory{planner.plan_ready});
   });
 
@@ -193,7 +211,12 @@ TEST(Integration, Pipeline) {
   auto control_thread = std::thread([&] {
     Trajectory traj;
     traj_queue.wait_and_pop(traj);
-    ctrl.apply(traj);
+    DeltaPose local_delta;
+    {
+      std::lock_guard<std::mutex> lock(delta_mutex);
+      local_delta = shared_delta;
+    }
+    ctrl.apply(traj, local_delta);
   });
 
   recog_thread.join();
